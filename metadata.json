@@ -1,0 +1,7 @@
+{
+  "name": "DreamStream",
+  "description": "A multi-modal dream journal that transcribes voice recordings, generates surrealist visualizations, and provides psychological interpretations using Gemini.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
