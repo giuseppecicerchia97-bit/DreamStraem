@@ -10,16 +10,16 @@ interface AudioRecorderProps {
 export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplete, imageSize, setImageSize }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
+  const [permissionError, setPermissionError] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animationFrameRef = useRef<number>();
+  const animationFrameRef = useRef<number>(0);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
 
   useEffect(() => {
-    // Fixed: Use 'any' type for interval because NodeJS namespace is not available in browser environment.
     let interval: any;
     if (isRecording) {
       interval = setInterval(() => {
@@ -34,49 +34,56 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplet
   const startVisualizer = (stream: MediaStream) => {
     if (!canvasRef.current) return;
 
-    audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-    analyserRef.current = audioContextRef.current.createAnalyser();
-    sourceRef.current = audioContextRef.current.createMediaStreamSource(stream);
-    
-    sourceRef.current.connect(analyserRef.current);
-    analyserRef.current.fftSize = 256;
-    
-    const bufferLength = analyserRef.current.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    
-    if (!ctx) return;
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) return;
 
-    const draw = () => {
-      if (!analyserRef.current) return;
+      audioContextRef.current = new AudioContextClass();
+      analyserRef.current = audioContextRef.current.createAnalyser();
+      sourceRef.current = audioContextRef.current.createMediaStreamSource(stream);
       
-      animationFrameRef.current = requestAnimationFrame(draw);
-      analyserRef.current.getByteFrequencyData(dataArray);
+      sourceRef.current.connect(analyserRef.current);
+      analyserRef.current.fftSize = 256;
+      
+      const bufferLength = analyserRef.current.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      
+      if (!ctx) return;
 
-      ctx.fillStyle = 'rgb(15, 23, 42)'; // Background color
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      const barWidth = (canvas.width / bufferLength) * 2.5;
-      let barHeight;
-      let x = 0;
-
-      for (let i = 0; i < bufferLength; i++) {
-        barHeight = dataArray[i] / 2;
+      const draw = () => {
+        if (!analyserRef.current) return;
         
-        // Gradient fill
-        const gradient = ctx.createLinearGradient(0, canvas.height - barHeight, 0, canvas.height);
-        gradient.addColorStop(0, '#818cf8');
-        gradient.addColorStop(1, '#4f46e5');
-        
-        ctx.fillStyle = gradient;
-        ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+        animationFrameRef.current = requestAnimationFrame(draw);
+        analyserRef.current.getByteFrequencyData(dataArray);
 
-        x += barWidth + 1;
-      }
-    };
+        ctx.fillStyle = 'rgb(15, 23, 42)'; // Background color
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    draw();
+        const barWidth = (canvas.width / bufferLength) * 2.5;
+        let barHeight;
+        let x = 0;
+
+        for (let i = 0; i < bufferLength; i++) {
+          barHeight = dataArray[i] / 2;
+          
+          // Gradient fill
+          const gradient = ctx.createLinearGradient(0, canvas.height - barHeight, 0, canvas.height);
+          gradient.addColorStop(0, '#818cf8');
+          gradient.addColorStop(1, '#4f46e5');
+          
+          ctx.fillStyle = gradient;
+          ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+
+          x += barWidth + 1;
+        }
+      };
+
+      draw();
+    } catch (e) {
+      console.error("Visualizer setup error:", e);
+    }
   };
 
   const stopVisualizer = () => {
@@ -84,7 +91,10 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplet
       cancelAnimationFrame(animationFrameRef.current);
     }
     if (audioContextRef.current) {
-      audioContextRef.current.close();
+      if (audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close().catch(console.error);
+      }
+      audioContextRef.current = null;
     }
     // Clear canvas
     const canvas = canvasRef.current;
@@ -95,6 +105,19 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplet
   };
 
   const startRecording = async () => {
+    setPermissionError(false);
+    
+    // Check for Secure Context which is required for getUserMedia
+    if (!window.isSecureContext && window.location.hostname !== 'localhost') {
+       alert("Microphone access requires a secure context (HTTPS).");
+       return;
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert("Microphone access is not supported in this browser.");
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorderRef.current = new MediaRecorder(stream);
@@ -116,9 +139,26 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplet
       mediaRecorderRef.current.start();
       startVisualizer(stream);
       setIsRecording(true);
-    } catch (err) {
-      console.error("Error accessing microphone:", err);
-      alert("Could not access microphone. Please check permissions.");
+    } catch (err: any) {
+      // Clean up if we partially started
+      stopVisualizer();
+      
+      console.warn("Microphone access denied or failed:", err);
+      
+      const errorMsg = err.message?.toLowerCase() || "";
+      const errorName = err.name;
+      
+      if (
+        errorName === 'NotAllowedError' || 
+        errorName === 'PermissionDeniedError' || 
+        errorMsg.includes('permission') || 
+        errorMsg.includes('denied') ||
+        errorMsg.includes('blocked')
+      ) {
+        setPermissionError(true);
+      } else {
+        alert(`Could not access microphone: ${err.name} - ${err.message}. Please check system settings.`);
+      }
     }
   };
 
@@ -142,11 +182,28 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplet
         <p className="text-slate-400">Record your dream immediately upon waking.</p>
       </div>
 
-      <div className="relative w-full h-32 mb-8 bg-slate-900 rounded-xl overflow-hidden border border-slate-700">
+      <div className="relative w-full h-32 mb-8 bg-slate-900 rounded-xl overflow-hidden border border-slate-700 group">
          <canvas ref={canvasRef} width="500" height="128" className="w-full h-full" />
-         {!isRecording && (
+         {!isRecording && !permissionError && (
            <div className="absolute inset-0 flex items-center justify-center text-slate-500 text-sm">
              Waiting for voice...
+           </div>
+         )}
+         {permissionError && (
+           <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/95 p-4 text-center z-10">
+             <div className="text-red-400 font-bold mb-2 flex items-center gap-2">
+               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+               Microphone Blocked
+             </div>
+             <p className="text-xs text-slate-400 mb-4 max-w-[250px]">
+               Please allow microphone access in your browser's address bar settings, then try again.
+             </p>
+             <button 
+               onClick={startRecording}
+               className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-xs text-white rounded-lg transition-colors border border-slate-600"
+             >
+               Retry Access
+             </button>
            </div>
          )}
       </div>

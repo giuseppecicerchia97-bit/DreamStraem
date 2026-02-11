@@ -5,7 +5,9 @@ import { DreamState, DreamAnalysis, ImageSize } from './types';
 import { analyzeDreamAudio, generateDreamImage, hasApiKey, selectApiKey } from './services/geminiService';
 
 const App: React.FC = () => {
-  const [apiKeyReady, setApiKeyReady] = useState<boolean>(false);
+  // Impostiamo apiKeyReady su TRUE di default per saltare la schermata di blocco
+  const [apiKeyReady, setApiKeyReady] = useState<boolean>(true);
+  
   const [state, setState] = useState<DreamState>({
     audioBlob: null,
     analysis: null,
@@ -17,23 +19,18 @@ const App: React.FC = () => {
     error: null,
   });
 
+  // Manteniamo il check della chiave solo per log o debug, ma non blocchiamo l'app
   useEffect(() => {
     checkKey();
   }, []);
 
   const checkKey = async () => {
-    const ready = await hasApiKey();
-    setApiKeyReady(ready);
-  };
-
-  const handleApiKeySelection = async () => {
     try {
-      await selectApiKey();
-      // Assume success and proceed, checking again is safest but per prompt we assume success to avoid race condition delays
-      setApiKeyReady(true);
+      // Tentiamo di verificare la chiave silenziosamente
+      await hasApiKey();
+      // Non cambiamo lo stato apiKeyReady perché è già true
     } catch (e) {
-      console.error(e);
-      // If failed, we might want to alert, but usually the dialog handles itself
+      console.log("Check key warning (ignorable in free mode)");
     }
   };
 
@@ -56,7 +53,7 @@ const App: React.FC = () => {
         step: 'generating_image' 
       }));
 
-      // 2. Generate Image
+      // 2. Generate Image (Ora userà la funzione "Safe" che abbiamo messo nel service)
       const imageUrl = await generateDreamImage(analysis.visualPrompt, state.imageSize);
 
       setState(prev => ({
@@ -94,34 +91,8 @@ const App: React.FC = () => {
     setState(prev => ({ ...prev, imageSize: size }));
   };
 
-  if (!apiKeyReady) {
-    return (
-      <div className="min-h-screen dream-gradient flex flex-col items-center justify-center p-4">
-         <div className="text-center space-y-8 max-w-md">
-            <h1 className="text-5xl font-serif text-white mb-2 tracking-wider">DreamStream</h1>
-            <p className="text-indigo-200 text-lg">
-              Unlock the hidden meanings of your dreams with AI-powered analysis and surrealist visualization.
-            </p>
-            <div className="bg-slate-900/50 p-6 rounded-2xl border border-indigo-500/30 backdrop-blur-md">
-               <p className="text-slate-300 mb-6">
-                 To generate high-quality 4K dream visualizations, this app requires a paid Google Cloud Project API Key (via Veo/Imagen).
-               </p>
-               <button 
-                 onClick={handleApiKeySelection}
-                 className="w-full py-4 px-6 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold shadow-lg shadow-indigo-600/30 transition-all transform hover:scale-[1.02]"
-               >
-                 Connect API Key
-               </button>
-               <div className="mt-4 text-xs text-slate-500">
-                 <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="underline hover:text-indigo-400">
-                   Learn more about billing & API keys
-                 </a>
-               </div>
-            </div>
-         </div>
-      </div>
-    );
-  }
+  // Ho rimosso il blocco "if (!apiKeyReady)" che mostrava la schermata blu di pagamento.
+  // Ora l'app renderizza direttamente l'interfaccia principale.
 
   return (
     <div className="min-h-screen dream-gradient text-slate-200 overflow-x-hidden">
